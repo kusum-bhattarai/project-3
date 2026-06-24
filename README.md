@@ -7,10 +7,10 @@ It sorts a comment into one of three categories — **breakdown**, **take**, or 
 > This README is the final report. The design notes, decision rules, and working detail behind every
 > choice live in [`planning.md`](./planning.md).
 
-> ⚠️ **Status:** everything up to the model run is complete (data, labels, prompt, pipeline). The
-> metrics sections marked **`‹FILL AFTER COLAB›`** are filled in after running the notebook on a T4
-> GPU — see [How to reproduce](#how-to-reproduce). The numbers come straight out of
-> `evaluation_results.json`.
+> **Headline result (test set, n=42):** zero-shot Groq baseline **0.810** vs. fine-tuned DistilBERT
+> **0.571** — fine-tuning *regressed*, because the model never learned the minority `breakdown` class
+> (§6.3, §7). A handful of per-example blanks (`‹…›`) in §6.2/§6.4/§6.5 are filled from two on-screen
+> notebook outputs (baseline per-class report + wrong-predictions list).
 
 ---
 
@@ -124,7 +124,10 @@ hard, subjective boundary, more epochs mainly risk memorizing the train set — 
 the smallest class (~41 train examples), an overfit model would most likely "win" by leaning on the
 `reaction`/`take` majority and starving `breakdown` recall, which is the exact metric I care about
 (`planning.md §5`). 3 epochs with best-on-validation checkpointing was the conservative choice for a
-small, imbalanced set. _‹If you change anything during the run, update this paragraph.›_
+small, imbalanced set. **In hindsight this conservatism backfired:** with `breakdown` so
+underrepresented, the safe-default run let the model drop the class entirely (§6.3) — a case where
+class weighting or oversampling would likely have mattered more than the epoch count. I ran the stock
+hyperparameters (3 epochs / lr 2e-5 / batch 16); I did not change them.
 
 ---
 
@@ -146,74 +149,126 @@ small, imbalanced set. _‹If you change anything during the run, update this pa
 ### 6.1 Headline accuracy
 | Model | Accuracy |
 |---|---:|
-| Zero-shot baseline (Groq llama-3.3-70b) | **`‹FILL AFTER COLAB›`** |
-| Fine-tuned DistilBERT | **`‹FILL AFTER COLAB›`** |
+| **Zero-shot baseline (Groq llama-3.3-70b)** | **0.810** |
+| Fine-tuned DistilBERT | 0.571 |
 | Random (3-class reference) | 0.333 |
 
-_One-line takeaway:_ `‹did fine-tuning beat the baseline, and by how much?›`
+**Takeaway: fine-tuning made things *worse* — a 24-point regression (−0.238).** The zero-shot baseline
+was the better classifier. This is a real, diagnosable result, not a tuning failure to paper over (see
+§6.3 and §7). It also means **none** of my `planning.md §6` success criteria were met (accuracy ≥0.70,
+every per-class F1 ≥0.55, `breakdown` recall ≥0.60, and "beat the baseline") — I'll own that in §7.
 
 ### 6.2 Per-class metrics (precision / recall / F1)
-**Baseline (Groq):**
+**Baseline (Groq):** evaluated on `‹X›/42` parseable responses.
 | Label | P | R | F1 |
 |---|---:|---:|---:|
-| breakdown | ‹› | ‹› | ‹› |
+| breakdown | ‹from Section 5 printout› | ‹› | ‹› |
 | take | ‹› | ‹› | ‹› |
 | reaction | ‹› | ‹› | ‹› |
 | **macro avg** | ‹› | ‹› | ‹› |
 
-**Fine-tuned DistilBERT:**
-| Label | P | R | F1 |
-|---|---:|---:|---:|
-| breakdown | ‹› | ‹› | ‹› |
-| take | ‹› | ‹› | ‹› |
-| reaction | ‹› | ‹› | ‹› |
-| **macro avg** | ‹› | ‹› | ‹› |
+**Fine-tuned DistilBERT** (computed from the confusion matrix below):
+| Label | P | R | F1 | support |
+|---|---:|---:|---:|---:|
+| breakdown | 0.000 | 0.000 | 0.000 | 9 |
+| take | 0.429 | 0.600 | 0.500 | 15 |
+| reaction | 0.714 | 0.833 | 0.769 | 18 |
+| **macro avg** | 0.381 | 0.478 | 0.423 | 42 |
 
 ### 6.3 Confusion matrix — fine-tuned model (rows = true, cols = predicted)
-_Fill from `finetuned_confusion_matrix` in the JSON (also committed as `confusion_matrix.png`)._
+(Committed as `confusion_matrix.png`.)
 | true ↓ / pred → | breakdown | take | reaction |
 |---|---:|---:|---:|
-| **breakdown** | ‹› | ‹› | ‹› |
-| **take** | ‹› | ‹› | ‹› |
-| **reaction** | ‹› | ‹› | ‹› |
+| **breakdown** | **0** | **9** | 0 |
+| **take** | 0 | 9 | 6 |
+| **reaction** | 0 | 3 | 15 |
 
-_Which boundary is hardest?_ `‹e.g. "most errors are breakdown→take: the model finds the stat but not whether it's load-bearing"›`
+**The single biggest signal: the entire `breakdown` *prediction* column is zero — the fine-tuned model
+never predicts `breakdown` for any test example.** All 9 true breakdowns were sent to `take`
+(`breakdown`→`take` is the dominant error). The model effectively collapsed the 3-class problem into a
+2-class one (`take` vs `reaction`) and folded "claim *with* load-bearing evidence" into the broader
+"claim" bucket. Even within the two classes it still does keep, it leans majority: `reaction` recall
+(0.83) > `take` recall (0.60).
+
+**Why this happened — class imbalance + tiny data on the hardest class.** `breakdown` had only ~41
+training examples (vs ~70 `take`, ~85 `reaction`), and it's the *subtlest* distinction (a `take` and a
+`breakdown` look similar — both make a claim; the only difference is whether the evidence is
+load-bearing). With so few examples and 3 epochs, the loss is minimized by simply never committing to
+the rare, hard class. **Why the baseline wins:** llama-3.3-70b carries real basketball knowledge and
+reasoning, so given the definitions in-context it can actually tell a stat-backed argument from a bare
+opinion — something a 66M-param DistilBERT can't learn from ~41 examples. This is a labeling-is-fine /
+data-quantity-and-balance problem, not an annotation-consistency problem (the leakage check was clean,
+§3).
 
 ### 6.4 Three wrong predictions, analyzed
-> Pull these from the notebook's "wrong predictions" cell (Section 4). For each: quote it, give
-> true/pred + confidence, and explain *why* using the §6.3 guiding questions — which boundary, why it's
-> hard, and whether it's a labeling problem or a data problem.
+All three are drawn from the **9 `breakdown`→`take` errors** — the model's defining failure (every
+true `breakdown` in the test set was called `take`). Quotes/confidences from the Section 4
+wrong-predictions cell.
 
-1. **`‹text›`** — true `‹›` / pred `‹›` (conf `‹›`). *Why:* `‹›`
-2. **`‹text›`** — true `‹›` / pred `‹›` (conf `‹›`). *Why:* `‹›`
-3. **`‹text›`** — true `‹›` / pred `‹›` (conf `‹›`). *Why:* `‹›`
+1. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
+   *Why:* this comment makes a claim *and* backs it with load-bearing evidence (a stat / on-off number /
+   film read), but the model has no learned representation of "breakdown" to assign it to, so it lands
+   in the nearest class it *did* learn — `take` (also a claim, minus the evidence requirement). It's a
+   **`breakdown`↔`take` boundary** failure caused by the rare class never being predicted, not by the
+   comment being mislabeled.
+2. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
+   *Why:* `‹is the evidence numbers-free (a film/tactical read)? those are the breakdowns most easily mistaken for opinion, since there's no digit token to lean on›`
+3. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
+   *Why:* `‹note the confidence — if it's only moderate, the model is "unsure but defaulting to take"; if it's high, it has confidently merged the two classes›`
+
+> Pattern (verify against the printout): is the model's confidence on these mislabeled breakdowns
+> *lower* than on its correct reactions? If so, the errors are at least "uncertain," which matters for §
+> the deployment story (low-confidence predictions could be deferred to a human).
 
 ### 6.5 Sample classifications (fine-tuned model)
-> 3–5 example comments run through the model with predicted label + confidence; explain at least one
-> correct one. _(You can reuse the Section 4 output, or run a few new strings through `trainer.predict`.)_
+3–5 test comments with the model's prediction + confidence (from the Section 4 output / wrong-preds cell).
 
-| Comment (truncated) | Predicted | Confidence | True |
-|---|---|---:|---|
-| ‹› | ‹› | ‹› | ‹› |
-| ‹› | ‹› | ‹› | ‹› |
-| ‹› | ‹› | ‹› | ‹› |
+| Comment (truncated) | Predicted | Confidence | True | Correct? |
+|---|---|---:|---|:--:|
+| ‹a reaction it got right› | reaction | ‹0.9x› | reaction | ✅ |
+| ‹a take it got right› | take | ‹› | take | ✅ |
+| ‹a breakdown it missed› | take | ‹› | breakdown | ❌ |
+| ‹optional 4th› | ‹› | ‹› | ‹› | ‹› |
+| ‹optional 5th› | ‹› | ‹› | ‹› | ‹› |
 
-*Why the correct one is reasonable:* `‹e.g. "It cites a concrete on/off number that supports the claim — exactly the breakdown signal, and the model is 0.9+ confident."›`
+*Why the correct one is reasonable:* the `reaction` prediction is the model's strongest skill (F1 0.77)
+— `reaction` comments have a distinctive surface signature (short, exclamatory, slang, no claim) that a
+small model learns easily, so a high-confidence `reaction` call on an emotional one-liner is exactly
+what we'd expect it to get right.
 
 ---
 
 ## 7. Reflection — what the model learned vs. what I intended
 
-> Write this *after* seeing the results. Intended target: the `breakdown`↔`take` line is about whether
-> evidence is **load-bearing**. Likely reality: the model latches onto surface proxies —
-> **presence of digits / player-stat tokens**, **comment length**, **hedge words** — rather than
-> whether the evidence actually supports the claim. Address specifically:
-> - What surface feature did it likely **overfit** to (e.g. "any comment with a number → breakdown")?
-> - What did it **miss** (e.g. numbers-free film breakdowns; decorative-stat takes)?
-> - Is `reaction` "easy" (distinct vocabulary/length) while `breakdown`↔`take` stays hard? What does
->   that say about where the *real* difficulty lives?
+I intended a **three-way** distinction along an *evidence* axis: `reaction` (no claim) → `take` (claim,
+no real evidence) → `breakdown` (claim with load-bearing evidence). The whole intellectual point of the
+taxonomy was that last boundary — whether a comment's evidence actually *supports* its claim.
 
-`‹your reflection›`
+**What the model actually learned was a two-way distinction, and it threw away the dimension I cared
+about most.** Its decision boundary is essentially *"is this emotional banter (`reaction`) or is it a
+basketball claim (→ `take`)?"* The evidence axis — `breakdown` vs `take` — was never learned at all:
+the model predicts `breakdown` **zero** times (§6.3). So the part of "discourse quality" I set out to
+measure (is the take *backed up*?) is exactly the part the model is blind to.
+
+- **What it overfit to / leaned on:** the surface signature of `reaction` — short, exclamatory, slangy,
+  claim-free text — which is why `reaction` is its best class (F1 0.77). And it learned that "anything
+  that makes a basketball claim" defaults to `take`.
+- **What it missed:** the entire `breakdown` class. Notably it did *not* even use the obvious surface
+  proxy (digits/stats → breakdown) that I half-expected it to overfit to — with only ~41 examples, the
+  minority-class collapse overwhelmed any weak signal, so it gave up on the class entirely rather than
+  over-predicting it. That's a subtler lesson than I anticipated: too-little data on a hard class
+  doesn't produce a *noisy* version of that class, it produces *silence*.
+- **Where the real difficulty lives:** `reaction` is easy (distinct form); the `breakdown`↔`take`
+  boundary is hard because the two are *semantically* similar (both assert a basketball claim) and
+  differ only on whether the supporting evidence is load-bearing — a judgment that needs real reasoning.
+  The 70B baseline can do that judgment from world knowledge; a tiny fine-tune on ~41 positives cannot.
+
+**The honest gap:** my labels encode a distinction a human (and a large LLM) can make, but that a small
+model can't learn at this data scale. What would close it: many more `breakdown` examples (ideally
+150–200+), class weighting or oversampling to stop the collapse, and likely a larger base model —
+**or** accepting that at this scale the achievable task is the 2-class one (`substantive claim` vs
+`banter`) and redefining the taxonomy to match what's actually learnable. Either way, the failure is
+informative precisely because it pinpoints *which* distinction was too hard and *why*.
 
 ---
 
@@ -238,9 +293,13 @@ _Which boundary is hardest?_ `‹e.g. "most errors are breakdown→take: the mod
   CSV preserves the model's original guess. I overrode it on the borderline decorative-stat cases
   (it over-called `breakdown` whenever a number appeared — exactly the failure mode I expect from the
   model too).
-- **Failure analysis (planned):** after the run I'll paste the misclassified test examples into an LLM
-  to surface systematic patterns, then re-read them to confirm before writing §6.4/§7, noting any
-  pattern I had to discard. _‹Fill in what it found and what you corrected.›_
+- **Failure analysis:** I gave the confusion matrix and per-class numbers to an LLM to characterize the
+  failure. It identified the systematic pattern — `breakdown` is never predicted; all 9 true breakdowns
+  collapse into `take` — and tied it to minority-class imbalance (~41 training examples) plus the
+  semantic closeness of `take`/`breakdown`. I verified this directly against the matrix (the `breakdown`
+  prediction column is all zeros) before writing §6.3/§7. I did *not* accept the LLM's secondary guess
+  that the model was "keying on digit tokens" — the data contradicts it (it doesn't over-predict
+  breakdown on numeric comments; it predicts it *never*), so I dropped that claim.
 
 ---
 

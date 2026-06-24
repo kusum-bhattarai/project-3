@@ -9,8 +9,8 @@ It sorts a comment into one of three categories — **breakdown**, **take**, or 
 
 > **Headline result (test set, n=42):** zero-shot Groq baseline **0.810** vs. fine-tuned DistilBERT
 > **0.571** — fine-tuning *regressed*, because the model never learned the minority `breakdown` class
-> (§6.3, §7). A handful of per-example blanks (`‹…›`) in §6.2/§6.4/§6.5 are filled from two on-screen
-> notebook outputs (baseline per-class report + wrong-predictions list).
+> (§6.3, §7). The report is complete with real numbers; the only remaining blank is **one** row in
+> §6.5 (a correctly-predicted example), which needs one trivial cell run in Colab — snippet inline there.
 
 ---
 
@@ -159,13 +159,18 @@ was the better classifier. This is a real, diagnosable result, not a tuning fail
 every per-class F1 ≥0.55, `breakdown` recall ≥0.60, and "beat the baseline") — I'll own that in §7.
 
 ### 6.2 Per-class metrics (precision / recall / F1)
-**Baseline (Groq):** evaluated on `‹X›/42` parseable responses.
-| Label | P | R | F1 |
-|---|---:|---:|---:|
-| breakdown | ‹from Section 5 printout› | ‹› | ‹› |
-| take | ‹› | ‹› | ‹› |
-| reaction | ‹› | ‹› | ‹› |
-| **macro avg** | ‹› | ‹› | ‹› |
+**Baseline (Groq):** evaluated on 42/42 parseable responses (0 unparseable).
+| Label | P | R | F1 | support |
+|---|---:|---:|---:|---:|
+| breakdown | 1.00 | 0.78 | 0.88 | 9 |
+| take | 0.71 | 0.80 | 0.75 | 15 |
+| reaction | 0.83 | 0.83 | 0.83 | 18 |
+| **macro avg** | 0.85 | 0.80 | 0.82 | 42 |
+
+**The contrast that tells the whole story:** the zero-shot baseline scores **`breakdown` F1 = 0.88**
+(precision 1.00 — every comment it calls a breakdown really is one); the fine-tuned model scores
+**`breakdown` F1 = 0.00**. A 70B model with my definitions in-context can identify evidence-backed
+claims; a small model fine-tuned on ~41 of them cannot.
 
 **Fine-tuned DistilBERT** (computed from the confusion matrix below):
 | Label | P | R | F1 | support |
@@ -205,36 +210,59 @@ All three are drawn from the **9 `breakdown`→`take` errors** — the model's d
 true `breakdown` in the test set was called `take`). Quotes/confidences from the Section 4
 wrong-predictions cell.
 
-1. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
-   *Why:* this comment makes a claim *and* backs it with load-bearing evidence (a stat / on-off number /
-   film read), but the model has no learned representation of "breakdown" to assign it to, so it lands
-   in the nearest class it *did* learn — `take` (also a claim, minus the evidence requirement). It's a
-   **`breakdown`↔`take` boundary** failure caused by the rare class never being predicted, not by the
-   comment being mislabeled.
-2. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
-   *Why:* `‹is the evidence numbers-free (a film/tactical read)? those are the breakdowns most easily mistaken for opinion, since there's no digit token to lean on›`
-3. **`‹breakdown comment text›`** — true **breakdown** / pred **take** (conf `‹›`).
-   *Why:* `‹note the confidence — if it's only moderate, the model is "unsure but defaulting to take"; if it's high, it has confidently merged the two classes›`
+1. **"…he also averages 11.7 rebounds and 9.3 assists (only 2.8 turnovers) in 33 min. The best stat
+   imo is his reliability. My guy has missed 1 game so far…"** — true **breakdown** / pred **take**
+   (conf **0.36**).
+   *Why:* this is the cleanest disproof of the obvious "the model just keys on numbers" hypothesis. The
+   comment is *dense* with stats — the most breakdown-like surface form possible — and the model still
+   calls it `take`, at only 0.36 confidence (barely above the 0.33 chance floor). With no learned
+   `breakdown` class, a stat-laden claim just reads as "a claim" → `take`. Boundary: `breakdown`↔`take`;
+   cause: the rare class was never learned, not the labeling.
+2. **"…I don't think it's the sliding foot that gets the call here. Look at his left shoulder and
+   especially his left hip as it makes contact. That hip is 1) moving and 2) outside his shoulders…"**
+   — true **breakdown** / pred **take** (conf **0.38**).
+   *Why:* a **numbers-free breakdown** — pure film/tactical reasoning. These are the breakdowns easiest
+   to mistake for opinion, because the "evidence" is the *specificity of the visual read*, not a stat
+   token. It confirms the boundary is **semantic, not lexical**: telling this from a hot take needs you
+   to evaluate whether the description actually supports the claim — exactly what the small model can't
+   do.
+3. **"Those 10 players are either hurt (Ingram, Dick, Mogbo, Walter, Chomche), nursing an injury (IQ),
+   having a day off… That isn't close to sitting out 10 guys for rest."** — true **breakdown** / pred
+   **take** (conf **0.40**).
+   *Why:* this is one of my flagged hard cases (`planning.md §7`) — it reads like banter but factually
+   rebuts a claim, so I labeled it `breakdown` deliberately. Because that labeling was consistent and
+   the train/test leakage check was clean (§3), the miss is a **data-quantity** problem, not annotation
+   inconsistency: the model never saw enough breakdowns of this "looks-like-banter-but-isn't" shape.
 
-> Pattern (verify against the printout): is the model's confidence on these mislabeled breakdowns
-> *lower* than on its correct reactions? If so, the errors are at least "uncertain," which matters for §
-> the deployment story (low-confidence predictions could be deferred to a human).
+> **Confidence pattern (verified against the printout):** *every* misclassified `breakdown` sits at
+> **0.36–0.40** confidence — right on the 0.33 three-class chance floor. The model isn't *confidently*
+> wrong; it's defaulting to `take` with almost no conviction. That's actually a useful deployment
+> signal: a simple confidence threshold (defer anything < ~0.5 to a human) would catch most of these
+> errors rather than surfacing them as confident mistakes.
 
 ### 6.5 Sample classifications (fine-tuned model)
 3–5 test comments with the model's prediction + confidence (from the Section 4 output / wrong-preds cell).
 
 | Comment (truncated) | Predicted | Confidence | True | Correct? |
 |---|---|---:|---|:--:|
-| ‹a reaction it got right› | reaction | ‹0.9x› | reaction | ✅ |
-| ‹a take it got right› | take | ‹› | take | ✅ |
-| ‹a breakdown it missed› | take | ‹› | breakdown | ❌ |
-| ‹optional 4th› | ‹› | ‹› | ‹› | ‹› |
-| ‹optional 5th› | ‹› | ‹› | ‹› | ‹› |
+| "…11.7 rebounds and 9.3 assists (only 2.8 turnovers) in 33 min…" | take | 0.36 | breakdown | ❌ |
+| "Look at his left shoulder and especially his left hip as it makes contact…" | take | 0.38 | breakdown | ❌ |
+| "eubanks is terrible" | reaction | 0.53 | take | ❌ |
+| ‹a correctly-predicted reaction — from the one-cell snippet below› | reaction | ‹0.x› | reaction | ✅ |
 
-*Why the correct one is reasonable:* the `reaction` prediction is the model's strongest skill (F1 0.77)
-— `reaction` comments have a distinctive surface signature (short, exclamatory, slang, no claim) that a
-small model learns easily, so a high-confidence `reaction` call on an emotional one-liner is exactly
-what we'd expect it to get right.
+> To fill the correct row, run this one cell in Colab and copy any line:
+> ```python
+> correct_idx = np.where(ft_pred_ids == ft_true_ids)[0]
+> for idx in correct_idx[:6]:
+>     print(repr(test_df.iloc[idx]["text"][:110]), "->",
+>           ID_TO_LABEL[ft_pred_ids[idx]], f'{ft_probs[idx][ft_pred_ids[idx]]:.2f}')
+> ```
+
+*Why the correct one is reasonable:* `reaction` is the model's strongest class (F1 0.77) — those
+comments have a distinctive surface signature (short, exclamatory, slang, no basketball claim) that even
+a small model learns easily, so a `reaction` call on an emotional one-liner is exactly the kind of
+prediction we'd expect it to get right. The `eubanks is terrible` miss above shows the flip side: a
+*short* opinion has the surface form of banter, so the model files it as `reaction` rather than `take`.
 
 ---
 

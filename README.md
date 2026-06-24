@@ -234,11 +234,15 @@ wrong-predictions cell.
    the train/test leakage check was clean (§3), the miss is a **data-quantity** problem, not annotation
    inconsistency: the model never saw enough breakdowns of this "looks-like-banter-but-isn't" shape.
 
-> **Confidence pattern (verified against the printout):** *every* misclassified `breakdown` sits at
-> **0.36–0.40** confidence — right on the 0.33 three-class chance floor. The model isn't *confidently*
-> wrong; it's defaulting to `take` with almost no conviction. That's actually a useful deployment
-> signal: a simple confidence threshold (defer anything < ~0.5 to a human) would catch most of these
-> errors rather than surfacing them as confident mistakes.
+> **Confidence pattern (verified against the printout):** every misclassified `breakdown` sits at
+> **0.36–0.40** confidence — right on the 0.33 three-class chance floor. But the *correct* predictions
+> aren't much higher: sampled correct calls land at **0.39–0.47** (e.g. a correctly-labeled `reaction`
+> at 0.47, a correct `take` at 0.39). So the model is **uniformly under-confident**, and confidence
+> does **not** cleanly separate right from wrong — a naive "defer anything below 0.5 to a human" rule
+> would defer almost the entire test set, correct predictions included. The flat, near-chance
+> confidence everywhere is itself a symptom of how little the model actually learned from ~196 examples;
+> it's poorly calibrated, so confidence isn't a usable trust signal here (a real strike against
+> deployment readiness, per `planning.md §6`).
 
 ### 6.5 Sample classifications (fine-tuned model)
 3–5 test comments with the model's prediction + confidence (from the Section 4 output / wrong-preds cell).
@@ -248,21 +252,17 @@ wrong-predictions cell.
 | "…11.7 rebounds and 9.3 assists (only 2.8 turnovers) in 33 min…" | take | 0.36 | breakdown | ❌ |
 | "Look at his left shoulder and especially his left hip as it makes contact…" | take | 0.38 | breakdown | ❌ |
 | "eubanks is terrible" | reaction | 0.53 | take | ❌ |
-| ‹a correctly-predicted reaction — from the one-cell snippet below› | reaction | ‹0.x› | reaction | ✅ |
+| "Let them eat Churros" | reaction | 0.47 | reaction | ✅ |
+| "He's not really a flawed player… he's just not motivated" | take | 0.39 | take | ✅ |
 
-> To fill the correct row, run this one cell in Colab and copy any line:
-> ```python
-> correct_idx = np.where(ft_pred_ids == ft_true_ids)[0]
-> for idx in correct_idx[:6]:
->     print(repr(test_df.iloc[idx]["text"][:110]), "->",
->           ID_TO_LABEL[ft_pred_ids[idx]], f'{ft_probs[idx][ft_pred_ids[idx]]:.2f}')
-> ```
-
-*Why the correct one is reasonable:* `reaction` is the model's strongest class (F1 0.77) — those
-comments have a distinctive surface signature (short, exclamatory, slang, no basketball claim) that even
-a small model learns easily, so a `reaction` call on an emotional one-liner is exactly the kind of
-prediction we'd expect it to get right. The `eubanks is terrible` miss above shows the flip side: a
-*short* opinion has the surface form of banter, so the model files it as `reaction` rather than `take`.
+*Why the correct one is reasonable:* **"Let them eat Churros" → `reaction` (0.47)** is exactly the kind
+of call we'd expect the model to get right. `reaction` is its strongest class (F1 0.77) because those
+comments have a clear surface signature — short, no basketball claim, joke/banter register — that even a
+small model picks up. The second correct row shows it can also catch a plain `take` ("not motivated" =
+an unevidenced judgment). Note, though, that **both correct predictions are low-confidence (0.47, 0.39)**
+— the model is right here, but barely committed, which is the calibration problem flagged in §6.4. The
+`eubanks is terrible` miss shows the flip side of the `reaction` skill: a *short* opinion has the surface
+form of banter, so the model files it as `reaction` rather than `take`.
 
 ---
 

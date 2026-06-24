@@ -338,8 +338,8 @@ informative precisely because it pinpoints *which* distinction was too hard and 
    `takemeter_dataset.csv` when prompted.
 4. **Section 2:** run the split + tokenize (label map and prompt are pre-filled).
 5. **Section 5 then 3, 4, 6** (baseline first per the project flow, or just run top-to-bottom).
-6. Download `evaluation_results.json` and `confusion_matrix.png`, commit them, and fill the
-   `‹FILL AFTER COLAB›` blanks in §6/§7 from the JSON.
+6. Download `evaluation_results.json` and `confusion_matrix.png` and commit them. (Both are already
+   committed for the run reported here.)
 
 ## Repo contents
 | File | What it is |
